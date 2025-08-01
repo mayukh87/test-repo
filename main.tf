@@ -20,7 +20,6 @@ data "aws_iam_policy_document" "adobe_analytics_policy" {
       "s3:ListBucket"
     ]
     resources = [
-      "arn:aws:s3:::${var.data_lake_bucket_name}/*",
       "arn:aws:s3:::${var.data_lake_bucket_name}"
     ]
     condition {
