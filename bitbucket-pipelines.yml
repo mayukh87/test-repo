@@ -16,47 +16,31 @@ pipelines:
           services:
             - docker
           script:
-            # Install curl and unzip (prereqs for AWS CLI install)
+            - echo "Installing prerequisites..."
             - yum install -y unzip wget
-
-            # Install AWS CLI v2
+            - echo "Installing AWS CLI v2..."
             - curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
             - unzip awscliv2.zip
             - ./aws/install
             - aws --version
-
-            # Inject AWS credentials from secured Bitbucket variables
+            - echo "Configuring AWS credentials..."
             - aws configure set aws_access_key_id "$AWS_ACCESS_KEY_ID"
             - aws configure set aws_secret_access_key "$AWS_SECRET_ACCESS_KEY"
             - aws configure set default.region "$AWS_DEFAULT_REGION"
-
-            # Install Terraform, TFLint,tfsec
+            - echo "Installing Terraform, TFLint, and tfsec..."
             - wget https://releases.hashicorp.com/terraform/1.8.2/terraform_1.8.2_linux_amd64.zip
             - unzip terraform_1.8.2_linux_amd64.zip
             - mv terraform /usr/local/bin/
             - terraform version
-
             - curl -s https://raw.githubusercontent.com/terraform-linters/tflint/master/install_linux.sh | bash
             - tflint --version
-
             - curl -s https://raw.githubusercontent.com/aquasecurity/tfsec/master/scripts/install_linux.sh | bash
             - tfsec --version
-
-            # Run terraform lint & sec & format
-            #- export TERM=xterm
-            #- .bitbucket/scripts/devenv-container.sh mkdir -p /tmp/iac-lint
-            #- .bitbucket/scripts/devenv-container.sh tflint --color --format compact > /tmp/iac-lint/tflint.log || echo 'TFLint failed' > /tmp/iac-lint/tflint.log
-            #- .bitbucket/scripts/devenv-container.sh tflint --color --format compact > /tmp/iac-lint/tflint.log || echo 'TFLint failed' > /tmp/iac-lint/tflint.log
-
-            # Run terraform lint & sec & format
+            - echo "Running terraform lint and security checks..."
             - tflint --color --format compact || echo "TFLint failed but continuing..." ; tfsec
-
-            # Initialize terraform and select workspace based on user selection
             - echo "Selected environment: $ENVIRONMENT"
             - terraform init
             - echo "Switching to $ENVIRONMENT workspace..."
             - terraform workspace select $ENVIRONMENT || terraform workspace new $ENVIRONMENT
             - echo "Successfully switched to $ENVIRONMENT workspace"
             - terraform workspace show
-          artifacts:
-            - terraform.tfstate*
