@@ -1,0 +1,26 @@
+image: atlassian/default-image:4
+
+definitions:
+  steps:
+    - step: &terraform-workspace-select
+        name: Select Terraform Workspace
+        script:
+          - echo "Selected environment: $ENVIRONMENT"
+          - echo "Switching to $ENVIRONMENT workspace..."
+          - terraform workspace select $ENVIRONMENT
+          - echo "Successfully switched to $ENVIRONMENT workspace"
+        artifacts:
+          - terraform.tfstate*
+
+pipelines:
+  branches:
+    feature/*:
+      - variables:
+          - name: ENVIRONMENT
+            description: "Select the environment (DEV/QA/PROD)"
+            allowed-values:
+              - DEV
+              - QA  
+              - PROD
+            default: DEV
+      - step: *terraform-workspace-select
