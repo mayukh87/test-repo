@@ -1,0 +1,46 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: prod-vcluster
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: vcluster
+    app.kubernetes.io/instance: prod
+    environment: production
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/YOUR_ORG/YOUR_REPO.git  # Replace with your repo
+    targetRevision: HEAD
+    path: helm/vcluster
+    helm:
+      valueFiles:
+      - ../../vcluster-configs/prod/values.yaml
+      parameters:
+      - name: vcluster.name
+        value: prod-vcluster
+      - name: vcluster.namespace
+        value: vcluster-prod
+      - name: vcluster.resources.requests.cpu
+        value: "2"
+      - name: vcluster.resources.requests.memory
+        value: "4Gi"
+      - name: vcluster.resources.limits.cpu
+        value: "4"
+      - name: vcluster.resources.limits.memory
+        value: "8Gi"
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: vcluster-prod
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+    - CreateNamespace=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m

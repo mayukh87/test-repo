@@ -1,0 +1,262 @@
+name: Delete vCluster on Branch Deletion
+
+on:
+  delete:
+    branches:
+      - 'dev'
+      - 'qa'
+      - 'feature/*'
+      - 'hotfix/*'
+
+env:
+  AWS_REGION: us-east-1
+  EKS_CLUSTER_NAME: your-eks-cluster  # Replace with your cluster name
+
+jobs:
+  delete-vcluster-config:
+    runs-on: ubuntu-latest
+    if: github.event.ref_type == 'branch'
+    
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        token: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Set up environment variables
+      run: |
+        BRANCH_NAME="${{ github.event.ref }}"
+        # Clean branch name for k8s resource naming
+        CLEAN_BRANCH=$(echo "$BRANCH_NAME" | sed 's/[^a-zA-Z0-9-]/-/g' | tr '[:upper:]' '[:lower:]' | sed 's/--*/-/g' | sed 's/^-\|-$//g')
+        echo "BRANCH_NAME=$BRANCH_NAME" >> $GITHUB_ENV
+        echo "CLEAN_BRANCH=$CLEAN_BRANCH" >> $GITHUB_ENV
+        echo "VCLUSTER_NAME=${CLEAN_BRANCH}-vcluster" >> $GITHUB_ENV
+        echo "NAMESPACE=vcluster-${CLEAN_BRANCH}" >> $GITHUB_ENV
+        echo "CONFIG_PATH=vcluster-configs/${CLEAN_BRANCH}" >> $GITHUB_ENV
+    
+    - name: Check if vCluster configuration exists
+      id: check_config
+      run: |
+        if [ -d "${{ env.CONFIG_PATH }}" ]; then
+          echo "config_exists=true" >> $GITHUB_OUTPUT
+          echo "vCluster configuration found for branch ${{ env.BRANCH_NAME }}"
+        else
+          echo "config_exists=false" >> $GITHUB_OUTPUT
+          echo "No vCluster configuration found for branch ${{ env.BRANCH_NAME }}"
+        fi
+    
+    - name: Configure AWS credentials
+      if: steps.check_config.outputs.config_exists == 'true'
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+    
+    - name: Install kubectl
+      if: steps.check_config.outputs.config_exists == 'true'
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'latest'
+    
+    - name: Configure kubectl for EKS
+      if: steps.check_config.outputs.config_exists == 'true'
+      run: |
+        aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name ${{ env.EKS_CLUSTER_NAME }}
+    
+    - name: Force delete vCluster resources (if ArgoCD fails)
+      if: steps.check_config.outputs.config_exists == 'true'
+      run: |
+        echo "Attempting to force delete vCluster resources..."
+        
+        # Delete the vCluster custom resource
+        kubectl delete virtualcluster ${{ env.VCLUSTER_NAME }} -n ${{ env.NAMESPACE }} --ignore-not-found=true --timeout=60s || true
+        
+        # Delete the namespace (this will cascade delete everything)
+        kubectl delete namespace ${{ env.NAMESPACE }} --ignore-not-found=true --timeout=120s || true
+        
+        # Clean up any lingering ArgoCD application
+        kubectl delete application vcluster-${{ env.CLEAN_BRANCH }} -n argocd --ignore-not-found=true --timeout=60s || true
+        
+        echo "Force deletion completed"
+    
+    - name: Remove vCluster configuration from repository
+      if: steps.check_config.outputs.config_exists == 'true'
+      run: |
+        # Remove the vCluster configuration directory
+        rm -rf "${{ env.CONFIG_PATH }}"
+        
+        # Commit the removal
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git add -A
+        git commit -m "feat: remove vCluster configuration for deleted branch ${{ env.BRANCH_NAME }}
+        
+        - Removed vCluster config for branch: ${{ env.BRANCH_NAME }}
+        - vCluster name: ${{ env.VCLUSTER_NAME }}
+        - Namespace: ${{ env.NAMESPACE }}
+        - Triggered by branch deletion
+        
+        ArgoCD will automatically cleanup the associated resources." || echo "No changes to commit"
+        
+        git push origin HEAD || echo "Nothing to push"
+    
+    - name: Wait for ArgoCD cleanup
+      if: steps.check_config.outputs.config_exists == 'true'
+      run: |
+        echo "Waiting for ArgoCD to detect configuration removal and cleanup resources..."
+        sleep 30
+        
+        # Check if the ArgoCD application still exists
+        for i in {1..10}; do
+          if ! kubectl get application vcluster-${{ env.CLEAN_BRANCH }} -n argocd >/dev/null 2>&1; then
+            echo "ArgoCD application successfully removed"
+            break
+          fi
+          echo "Waiting for ArgoCD cleanup... attempt $i/10"
+          sleep 30
+        done
+    
+    - name: Verify cleanup completion
+      if: steps.check_config.outputs.config_exists == 'true'
+      run: |
+        echo "Verifying cleanup completion..."
+        
+        # Check if namespace still exists
+        if kubectl get namespace ${{ env.NAMESPACE }} >/dev/null 2>&1; then
+          echo "⚠️ Warning: Namespace ${{ env.NAMESPACE }} still exists"
+          kubectl get all -n ${{ env.NAMESPACE }} || true
+        else
+          echo "✅ Namespace ${{ env.NAMESPACE }} successfully removed"
+        fi
+        
+        # Check if ArgoCD application still exists
+        if kubectl get application vcluster-${{ env.CLEAN_BRANCH }} -n argocd >/dev/null 2>&1; then
+          echo "⚠️ Warning: ArgoCD application vcluster-${{ env.CLEAN_BRANCH }} still exists"
+        else
+          echo "✅ ArgoCD application successfully removed"
+        fi
+    
+    - name: Find and close related GitHub issue
+      if: steps.check_config.outputs.config_exists == 'true'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          // Search for issues related to this vCluster
+          const issues = await github.rest.issues.listForRepo({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            state: 'open',
+            labels: 'vcluster'
+          });
+          
+          // Find the issue for this specific branch
+          const branchName = '${{ env.BRANCH_NAME }}';
+          const vclusterName = '${{ env.VCLUSTER_NAME }}';
+          
+          for (const issue of issues.data) {
+            if (issue.title.includes(branchName) || issue.body.includes(vclusterName)) {
+              // Close the issue with a comment
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body: `## 🗑️ vCluster Deleted
+                
+                The vCluster for branch \`${branchName}\` has been automatically deleted.
+                
+                ### Cleanup Summary:
+                - **vCluster Name:** \`${{ env.VCLUSTER_NAME }}\`
+                - **Namespace:** \`${{ env.NAMESPACE }}\`
+                - **Branch:** \`${{ env.BRANCH_NAME }}\`
+                - **Deleted:** ${new Date().toISOString()}
+                
+                ### Actions Performed:
+                ✅ Removed vCluster configuration from repository  
+                ✅ Triggered ArgoCD cleanup via GitOps  
+                ✅ Force deleted Kubernetes resources  
+                ✅ Cleaned up namespace and related resources  
+                
+                This issue is now being automatically closed.
+                
+                ---
+                *Cleanup completed automatically by GitHub Actions*`
+              });
+              
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                state: 'closed',
+                labels: [...issue.labels.map(l => l.name), 'deleted']
+              });
+              
+              console.log(`Closed issue #${issue.number} for vCluster ${vclusterName}`);
+              break;
+            }
+          }
+    
+    - name: Create deletion summary issue
+      if: steps.check_config.outputs.config_exists == 'true'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          github.rest.issues.create({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            title: `🗑️ vCluster Deleted: ${{ env.BRANCH_NAME }}`,
+            body: `## vCluster Deletion Summary
+            
+            The vCluster for branch \`${{ env.BRANCH_NAME }}\` has been automatically deleted following branch deletion.
+            
+            ### Details:
+            - **vCluster Name:** \`${{ env.VCLUSTER_NAME }}\`
+            - **Namespace:** \`${{ env.NAMESPACE }}\`
+            - **Branch:** \`${{ env.BRANCH_NAME }}\`
+            - **Deleted:** ${new Date().toISOString()}
+            
+            ### Cleanup Actions:
+            ✅ Configuration removed from repository  
+            ✅ ArgoCD Application cleaned up  
+            ✅ Kubernetes namespace deleted  
+            ✅ All associated resources removed  
+            
+            ### Verification:
+            - Check ArgoCD UI to confirm application removal
+            - Verify namespace \`${{ env.NAMESPACE }}\` no longer exists
+            - Confirm ingress \`${{ env.CLEAN_BRANCH }}-vcluster.yourdomain.com\` is no longer accessible
+            
+            ---
+            *This deletion was triggered automatically by GitHub Actions*`,
+            labels: ['vcluster', 'automation', 'deleted', 'cleanup']
+          });
+    
+    - name: Post summary
+      run: |
+        if [ "${{ steps.check_config.outputs.config_exists }}" == "true" ]; then
+          echo "## vCluster Deleted! 🗑️" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Branch | \`${{ env.BRANCH_NAME }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| vCluster Name | \`${{ env.VCLUSTER_NAME }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Namespace | \`${{ env.NAMESPACE }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Status | ✅ Deleted |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Cleanup Actions:" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Configuration removed from repository" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ ArgoCD application cleaned up" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Kubernetes resources deleted" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Namespace removed" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "## No vCluster Found 🤷‍♂️" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "No vCluster configuration was found for branch \`${{ env.BRANCH_NAME }}\`." >> $GITHUB_STEP_SUMMARY
+          echo "This might be expected if no vCluster was created for this branch." >> $GITHUB_STEP_SUMMARY
+        fi

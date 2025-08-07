@@ -1,0 +1,261 @@
+name: Create vCluster on Branch Creation
+
+on:
+  create:
+    branches:
+      - 'dev'
+      - 'qa'
+      - 'feature/*'
+      - 'hotfix/*'
+
+env:
+  AWS_REGION: us-east-1
+  EKS_CLUSTER_NAME: your-eks-cluster  # Replace with your cluster name
+
+jobs:
+  create-vcluster-config:
+    runs-on: ubuntu-latest
+    if: github.event.ref_type == 'branch'
+    
+    permissions:
+      contents: write
+      pull-requests: write
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        token: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Set up environment variables
+      run: |
+        BRANCH_NAME="${{ github.event.ref }}"
+        # Clean branch name for k8s resource naming
+        CLEAN_BRANCH=$(echo "$BRANCH_NAME" | sed 's/[^a-zA-Z0-9-]/-/g' | tr '[:upper:]' '[:lower:]' | sed 's/--*/-/g' | sed 's/^-\|-$//g')
+        echo "BRANCH_NAME=$BRANCH_NAME" >> $GITHUB_ENV
+        echo "CLEAN_BRANCH=$CLEAN_BRANCH" >> $GITHUB_ENV
+        echo "VCLUSTER_NAME=${CLEAN_BRANCH}-vcluster" >> $GITHUB_ENV
+        echo "NAMESPACE=vcluster-${CLEAN_BRANCH}" >> $GITHUB_ENV
+    
+    - name: Determine vCluster configuration
+      run: |
+        BRANCH_NAME="${{ env.BRANCH_NAME }}"
+        
+        # Determine resource allocation based on branch type
+        if [[ "$BRANCH_NAME" == "dev" ]]; then
+          CPU_REQUEST="0.2"
+          MEMORY_REQUEST="512Mi"
+          CPU_LIMIT="0.5"
+          MEMORY_LIMIT="1Gi"
+          STORAGE_SIZE="5Gi"
+          HOST_SUFFIX="dev"
+        elif [[ "$BRANCH_NAME" == "qa" ]]; then
+          CPU_REQUEST="0.5"
+          MEMORY_REQUEST="1Gi"
+          CPU_LIMIT="1"
+          MEMORY_LIMIT="2Gi"
+          STORAGE_SIZE="10Gi"
+          HOST_SUFFIX="qa"
+        elif [[ "$BRANCH_NAME" == feature/* ]] || [[ "$BRANCH_NAME" == hotfix/* ]]; then
+          CPU_REQUEST="0.1"
+          MEMORY_REQUEST="256Mi"
+          CPU_LIMIT="0.3"
+          MEMORY_LIMIT="512Mi"
+          STORAGE_SIZE="3Gi"
+          HOST_SUFFIX="feature"
+        else
+          CPU_REQUEST="0.2"
+          MEMORY_REQUEST="512Mi"
+          CPU_LIMIT="0.5"
+          MEMORY_LIMIT="1Gi"
+          STORAGE_SIZE="5Gi"
+          HOST_SUFFIX="dev"
+        fi
+        
+        echo "CPU_REQUEST=$CPU_REQUEST" >> $GITHUB_ENV
+        echo "MEMORY_REQUEST=$MEMORY_REQUEST" >> $GITHUB_ENV
+        echo "CPU_LIMIT=$CPU_LIMIT" >> $GITHUB_ENV
+        echo "MEMORY_LIMIT=$MEMORY_LIMIT" >> $GITHUB_ENV
+        echo "STORAGE_SIZE=$STORAGE_SIZE" >> $GITHUB_ENV
+        echo "HOST_SUFFIX=$HOST_SUFFIX" >> $GITHUB_ENV
+    
+    - name: Create vCluster configuration directory
+      run: |
+        mkdir -p "vcluster-configs/${{ env.CLEAN_BRANCH }}"
+    
+    - name: Generate vCluster values.yaml
+      run: |
+        cat > "vcluster-configs/${{ env.CLEAN_BRANCH }}/values.yaml" << EOF
+        vcluster:
+          name: "${{ env.VCLUSTER_NAME }}"
+          namespace: "${{ env.NAMESPACE }}"
+          
+          # Branch-specific resources
+          resources:
+            requests:
+              cpu: "${{ env.CPU_REQUEST }}"
+              memory: "${{ env.MEMORY_REQUEST }}"
+            limits:
+              cpu: "${{ env.CPU_LIMIT }}"
+              memory: "${{ env.MEMORY_LIMIT }}"
+          
+          # Storage configuration
+          storage:
+            size: "${{ env.STORAGE_SIZE }}"
+            className: "gp2"
+          
+          # Networking
+          service:
+            type: "LoadBalancer"
+            annotations:
+              service.beta.kubernetes.io/aws-load-balancer-scheme: "internal"
+          
+          # Security
+          rbac:
+            create: true
+          
+          # Syncer configuration
+          syncer:
+            extraArgs:
+            - --tls-san=${{ env.CLEAN_BRANCH }}-vcluster.internal
+            - --out-kube-config-server=https://${{ env.CLEAN_BRANCH }}-vcluster.internal
+          
+          # Enable features
+          isolation:
+            enabled: true
+            namespace: "kube-system"
+          
+          # Ingress configuration
+          ingress:
+            enabled: true
+            ingressClassName: "nginx"
+            host: "${{ env.CLEAN_BRANCH }}-vcluster.yourdomain.com"
+            annotations:
+              cert-manager.io/cluster-issuer: "letsencrypt-prod"
+              nginx.ingress.kubernetes.io/ssl-redirect: "true"
+          
+          # Labels for branch environment
+          labels:
+            environment: "${{ env.HOST_SUFFIX }}"
+            branch: "${{ env.BRANCH_NAME }}"
+            managed-by: "argocd"
+            created-by: "github-actions"
+            created-at: "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          
+          annotations:
+            argocd.argoproj.io/sync-wave: "1"
+            github.com/branch: "${{ env.BRANCH_NAME }}"
+            github.com/commit: "${{ github.sha }}"
+        EOF
+    
+    - name: Create README for vCluster
+      run: |
+        cat > "vcluster-configs/${{ env.CLEAN_BRANCH }}/README.md" << EOF
+        # vCluster: ${{ env.VCLUSTER_NAME }}
+        
+        **Branch:** ${{ env.BRANCH_NAME }}  
+        **Created:** $(date -u)  
+        **Managed by:** ArgoCD  
+        
+        ## Access Information
+        
+        - **vCluster Name:** ${{ env.VCLUSTER_NAME }}
+        - **Namespace:** ${{ env.NAMESPACE }}
+        - **Ingress Host:** ${{ env.CLEAN_BRANCH }}-vcluster.yourdomain.com
+        
+        ## Resource Allocation
+        
+        - **CPU Request/Limit:** ${{ env.CPU_REQUEST }}/${{ env.CPU_LIMIT }}
+        - **Memory Request/Limit:** ${{ env.MEMORY_REQUEST }}/${{ env.MEMORY_LIMIT }}
+        - **Storage:** ${{ env.STORAGE_SIZE }}
+        
+        ## Accessing the vCluster
+        
+        1. Get the vCluster kubeconfig:
+           \`\`\`bash
+           vcluster connect ${{ env.VCLUSTER_NAME }} -n ${{ env.NAMESPACE }}
+           \`\`\`
+        
+        2. Or access via ArgoCD UI:
+           - Look for application: \`vcluster-${{ env.CLEAN_BRANCH }}\`
+        
+        ## Cleanup
+        
+        This vCluster will be automatically deleted when the branch \`${{ env.BRANCH_NAME }}\` is deleted.
+        EOF
+    
+    - name: Commit and push vCluster configuration
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git add "vcluster-configs/${{ env.CLEAN_BRANCH }}/"
+        git commit -m "feat: add vCluster configuration for branch ${{ env.BRANCH_NAME }}
+        
+        - Created vCluster config for branch: ${{ env.BRANCH_NAME }}
+        - vCluster name: ${{ env.VCLUSTER_NAME }}
+        - Namespace: ${{ env.NAMESPACE }}
+        - Resources: ${{ env.CPU_REQUEST }}/${{ env.CPU_LIMIT }} CPU, ${{ env.MEMORY_REQUEST }}/${{ env.MEMORY_LIMIT }} Memory
+        - Storage: ${{ env.STORAGE_SIZE }}
+        
+        This will be automatically managed by ArgoCD ApplicationSet."
+        
+        git push origin HEAD
+    
+    - name: Create GitHub issue for vCluster creation
+      uses: actions/github-script@v7
+      with:
+        script: |
+          github.rest.issues.create({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            title: `🚀 vCluster Created for Branch: ${{ env.BRANCH_NAME }}`,
+            body: `## vCluster Information
+            
+            A new vCluster has been automatically created for branch \`${{ env.BRANCH_NAME }}\`.
+            
+            ### Details:
+            - **vCluster Name:** \`${{ env.VCLUSTER_NAME }}\`
+            - **Namespace:** \`${{ env.NAMESPACE }}\`
+            - **Branch:** \`${{ env.BRANCH_NAME }}\`
+            - **Created:** ${new Date().toISOString()}
+            
+            ### Resources:
+            - **CPU:** ${{ env.CPU_REQUEST }}/${{ env.CPU_LIMIT }}
+            - **Memory:** ${{ env.MEMORY_REQUEST }}/${{ env.MEMORY_LIMIT }}
+            - **Storage:** ${{ env.STORAGE_SIZE }}
+            
+            ### Access:
+            - **ArgoCD Application:** \`vcluster-${{ env.CLEAN_BRANCH }}\`
+            - **Ingress:** \`${{ env.CLEAN_BRANCH }}-vcluster.yourdomain.com\`
+            
+            ### Next Steps:
+            1. Check ArgoCD UI at: https://a1a2a7247b4e240129a9cc6099f23409-1670662044.us-east-1.elb.amazonaws.com
+            2. Look for the application \`vcluster-${{ env.CLEAN_BRANCH }}\`
+            3. Wait for ArgoCD to sync and deploy the vCluster
+            
+            ### Cleanup:
+            This vCluster will be automatically deleted when the branch is deleted.
+            
+            ---
+            *This issue was created automatically by GitHub Actions*`,
+            labels: ['vcluster', 'automation', 'infrastructure']
+          });
+    
+    - name: Post summary
+      run: |
+        echo "## vCluster Configuration Created! 🎉" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+        echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+        echo "| Branch | \`${{ env.BRANCH_NAME }}\` |" >> $GITHUB_STEP_SUMMARY
+        echo "| vCluster Name | \`${{ env.VCLUSTER_NAME }}\` |" >> $GITHUB_STEP_SUMMARY
+        echo "| Namespace | \`${{ env.NAMESPACE }}\` |" >> $GITHUB_STEP_SUMMARY
+        echo "| CPU | ${{ env.CPU_REQUEST }}/${{ env.CPU_LIMIT }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Memory | ${{ env.MEMORY_REQUEST }}/${{ env.MEMORY_LIMIT }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Storage | ${{ env.STORAGE_SIZE }} |" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### Next Steps:" >> $GITHUB_STEP_SUMMARY
+        echo "1. Check your ArgoCD UI for the new application: \`vcluster-${{ env.CLEAN_BRANCH }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "2. Wait for ArgoCD to sync and deploy the vCluster" >> $GITHUB_STEP_SUMMARY
+        echo "3. Access your vCluster at: \`${{ env.CLEAN_BRANCH }}-vcluster.yourdomain.com\`" >> $GITHUB_STEP_SUMMARY

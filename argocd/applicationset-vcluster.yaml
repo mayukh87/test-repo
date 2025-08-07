@@ -1,0 +1,74 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: vcluster-branches
+  namespace: argocd
+spec:
+  generators:
+  - git:
+      repoURL: https://github.com/YOUR_ORG/YOUR_REPO.git  # Replace with your repo
+      revision: HEAD
+      directories:
+      - path: vcluster-configs/*
+      requeueAfterSeconds: 60
+  template:
+    metadata:
+      name: 'vcluster-{{path.basename}}'
+      labels:
+        app.kubernetes.io/name: vcluster
+        app.kubernetes.io/instance: '{{path.basename}}'
+        branch: '{{path.basename}}'
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/YOUR_ORG/YOUR_REPO.git  # Replace with your repo
+        targetRevision: HEAD
+        path: helm/vcluster
+        helm:
+          valueFiles:
+          - '../../vcluster-configs/{{path.basename}}/values.yaml'
+          parameters:
+          - name: vcluster.name
+            value: '{{path.basename}}-vcluster'
+          - name: vcluster.namespace
+            value: 'vcluster-{{path.basename}}'
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: 'vcluster-{{path.basename}}'
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+        - CreateNamespace=true
+        retry:
+          limit: 5
+          backoff:
+            duration: 5s
+            factor: 2
+            maxDuration: 3m
+---
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: vcluster-cleanup
+  namespace: argocd
+spec:
+  generators:
+  - clusters: {}
+  template:
+    metadata:
+      name: 'vcluster-cleanup-{{name}}'
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/YOUR_ORG/YOUR_REPO.git  # Replace with your repo
+        targetRevision: HEAD
+        path: cleanup
+      destination:
+        server: '{{server}}'
+        namespace: argocd
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
