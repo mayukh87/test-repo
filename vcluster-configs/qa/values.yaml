@@ -1,0 +1,56 @@
+vcluster:
+  name: "qa-vcluster"
+  namespace: "vcluster-qa"
+  
+  # QA resources - moderate footprint
+  resources:
+    requests:
+      cpu: "0.5"
+      memory: "1Gi"
+    limits:
+      cpu: "1"
+      memory: "2Gi"
+  
+  # Storage configuration
+  storage:
+    size: "10Gi"
+    className: "gp2"
+  
+  # Networking
+  service:
+    type: "LoadBalancer"
+    annotations:
+      service.beta.kubernetes.io/aws-load-balancer-scheme: "internal"
+  
+  # Security
+  rbac:
+    create: true
+  
+  # Syncer configuration for QA
+  syncer:
+    extraArgs:
+    - --tls-san=qa-vcluster.internal
+    - --out-kube-config-server=https://qa-vcluster.internal
+  
+  # Enable features
+  isolation:
+    enabled: true
+    namespace: "kube-system"
+  
+  # Ingress configuration
+  ingress:
+    enabled: true
+    ingressClassName: "nginx"
+    host: "qa-vcluster.yourdomain.com"
+    annotations:
+      cert-manager.io/cluster-issuer: "letsencrypt-prod"
+      nginx.ingress.kubernetes.io/ssl-redirect: "true"
+  
+  # Labels for QA environment
+  labels:
+    environment: "qa"
+    branch: "qa"
+    managed-by: "argocd"
+  
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"

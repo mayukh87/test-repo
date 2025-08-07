@@ -1,0 +1,95 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Values.vcluster.namespace }}
+  labels:
+    {{- range $key, $value := .Values.vcluster.labels }}
+    {{ $key }}: {{ $value | quote }}
+    {{- end }}
+    app.kubernetes.io/name: vcluster
+    app.kubernetes.io/instance: {{ .Values.vcluster.name }}
+  annotations:
+    {{- range $key, $value := .Values.vcluster.annotations }}
+    {{ $key }}: {{ $value | quote }}
+    {{- end }}
+---
+apiVersion: storage.loft.sh/v1
+kind: VirtualCluster
+metadata:
+  name: {{ .Values.vcluster.name }}
+  namespace: {{ .Values.vcluster.namespace }}
+  labels:
+    {{- range $key, $value := .Values.vcluster.labels }}
+    {{ $key }}: {{ $value | quote }}
+    {{- end }}
+    app.kubernetes.io/name: vcluster
+    app.kubernetes.io/instance: {{ .Values.vcluster.name }}
+  annotations:
+    {{- range $key, $value := .Values.vcluster.annotations }}
+    {{ $key }}: {{ $value | quote }}
+    {{- end }}
+spec:
+  helmRelease:
+    chart:
+      name: vcluster
+      repo: https://charts.loft.sh
+      version: "0.19.5"
+    values: |
+      # Resources
+      vcluster:
+        resources:
+          requests:
+            cpu: {{ .Values.vcluster.resources.requests.cpu | quote }}
+            memory: {{ .Values.vcluster.resources.requests.memory | quote }}
+          limits:
+            cpu: {{ .Values.vcluster.resources.limits.cpu | quote }}
+            memory: {{ .Values.vcluster.resources.limits.memory | quote }}
+      
+      # Storage
+      storage:
+        size: {{ .Values.vcluster.storage.size | quote }}
+        {{- if .Values.vcluster.storage.className }}
+        className: {{ .Values.vcluster.storage.className | quote }}
+        {{- end }}
+      
+      # Service configuration
+      service:
+        type: {{ .Values.vcluster.service.type | quote }}
+        {{- if .Values.vcluster.service.annotations }}
+        annotations:
+          {{- range $key, $value := .Values.vcluster.service.annotations }}
+          {{ $key }}: {{ $value | quote }}
+          {{- end }}
+        {{- end }}
+      
+      # RBAC
+      rbac:
+        create: {{ .Values.vcluster.rbac.create }}
+      
+      # Syncer configuration
+      syncer:
+        extraArgs:
+        {{- range .Values.vcluster.syncer.extraArgs }}
+        - {{ . | quote }}
+        {{- end }}
+      
+      # Isolation
+      {{- if .Values.vcluster.isolation.enabled }}
+      isolation:
+        enabled: true
+        namespace: {{ .Values.vcluster.isolation.namespace | quote }}
+      {{- end }}
+      
+      # Ingress
+      {{- if .Values.vcluster.ingress.enabled }}
+      ingress:
+        enabled: true
+        ingressClassName: {{ .Values.vcluster.ingress.ingressClassName | quote }}
+        host: {{ .Values.vcluster.ingress.host | quote }}
+        {{- if .Values.vcluster.ingress.annotations }}
+        annotations:
+          {{- range $key, $value := .Values.vcluster.ingress.annotations }}
+          {{ $key }}: {{ $value | quote }}
+          {{- end }}
+        {{- end }}
+      {{- end }}

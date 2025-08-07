@@ -1,0 +1,56 @@
+vcluster:
+  name: "dev-vcluster"
+  namespace: "vcluster-dev"
+  
+  # Development resources - smaller footprint
+  resources:
+    requests:
+      cpu: "0.2"
+      memory: "512Mi"
+    limits:
+      cpu: "0.5"
+      memory: "1Gi"
+  
+  # Storage configuration
+  storage:
+    size: "5Gi"
+    className: "gp2"
+  
+  # Networking
+  service:
+    type: "LoadBalancer"
+    annotations:
+      service.beta.kubernetes.io/aws-load-balancer-scheme: "internal"
+  
+  # Security
+  rbac:
+    create: true
+  
+  # Syncer configuration for dev
+  syncer:
+    extraArgs:
+    - --tls-san=dev-vcluster.internal
+    - --out-kube-config-server=https://dev-vcluster.internal
+  
+  # Enable features
+  isolation:
+    enabled: true
+    namespace: "kube-system"
+  
+  # Ingress configuration
+  ingress:
+    enabled: true
+    ingressClassName: "nginx"
+    host: "dev-vcluster.yourdomain.com"
+    annotations:
+      cert-manager.io/cluster-issuer: "letsencrypt-prod"
+      nginx.ingress.kubernetes.io/ssl-redirect: "true"
+  
+  # Labels for development environment
+  labels:
+    environment: "development"
+    branch: "dev"
+    managed-by: "argocd"
+  
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"

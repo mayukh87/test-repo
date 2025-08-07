@@ -1,0 +1,61 @@
+vcluster:
+  name: "prod-vcluster"
+  namespace: "vcluster-prod"
+  
+  # Production resources - high availability
+  resources:
+    requests:
+      cpu: "2"
+      memory: "4Gi"
+    limits:
+      cpu: "4"
+      memory: "8Gi"
+  
+  # Storage configuration
+  storage:
+    size: "50Gi"
+    className: "gp3"
+  
+  # Networking
+  service:
+    type: "LoadBalancer"
+    annotations:
+      service.beta.kubernetes.io/aws-load-balancer-scheme: "internet-facing"
+      service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+  
+  # Security
+  rbac:
+    create: true
+  
+  # Syncer configuration for production
+  syncer:
+    extraArgs:
+    - --tls-san=prod-vcluster.yourdomain.com
+    - --out-kube-config-server=https://prod-vcluster.yourdomain.com
+    - --node-selector=node-type=production
+  
+  # Enable features with production settings
+  isolation:
+    enabled: true
+    namespace: "kube-system"
+  
+  # Ingress configuration
+  ingress:
+    enabled: true
+    ingressClassName: "nginx"
+    host: "prod-vcluster.yourdomain.com"
+    annotations:
+      cert-manager.io/cluster-issuer: "letsencrypt-prod"
+      nginx.ingress.kubernetes.io/ssl-redirect: "true"
+      nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+  
+  # Labels for production environment
+  labels:
+    environment: "production"
+    tier: "critical"
+    managed-by: "argocd"
+    backup: "required"
+  
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+    backup.kubernetes.io/enabled: "true"

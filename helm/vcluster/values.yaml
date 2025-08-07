@@ -1,0 +1,50 @@
+vcluster:
+  name: "default-vcluster"
+  namespace: "vcluster-default"
+  
+  # vCluster configuration
+  resources:
+    requests:
+      cpu: "0.5"
+      memory: "1Gi"
+    limits:
+      cpu: "1"
+      memory: "2Gi"
+  
+  # Storage configuration
+  storage:
+    size: "10Gi"
+    className: "gp2"
+  
+  # Networking
+  service:
+    type: "LoadBalancer"
+    annotations: {}
+  
+  # Security
+  rbac:
+    create: true
+  
+  # Syncer configuration
+  syncer:
+    extraArgs:
+    - --tls-san=localhost
+    - --out-kube-config-server=https://localhost
+  
+  # Enable features
+  isolation:
+    enabled: true
+    namespace: "kube-system"
+  
+  # Ingress configuration
+  ingress:
+    enabled: false
+    ingressClassName: "nginx"
+    host: ""
+    annotations: {}
+  
+  # Additional labels and annotations
+  labels: {}
+  annotations: {}
+
+# Environment-specific overrides will be provided via valueFiles
