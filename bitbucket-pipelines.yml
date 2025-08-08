@@ -46,6 +46,14 @@ pipelines:
           name: Pre-deployment validation
           image: alpine/git
           script:
+            # Show recent commits for reference
+            - echo "📋 Recent commits on branch ${BITBUCKET_BRANCH}:"
+            - echo "================================================"
+            - git log --oneline -10 --pretty=format:"%h - %s (%cr) <%an>"
+            - echo ""
+            - echo "💡 If you want to deploy a specific commit, cancel this pipeline and restart with the commit SHA above"
+            - echo ""
+            
             # Check if CI has passed for this branch
             - |
               if [ ! -f ci_status.txt ]; then
